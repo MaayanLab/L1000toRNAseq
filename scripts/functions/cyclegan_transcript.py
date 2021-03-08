@@ -86,26 +86,38 @@ parser.add_argument('--shuffle',  default=False, help='shuffle', action='store_t
 parser.add_argument('--evaluation',  default=False, help='evaluation', action='store_true')         
 parser.add_argument("--data_version", type=str, default="v2",
                     help="data_version")
+
+parser.add_argument("--y_true_output_filename", type=str, help="y_true.txt")
+parser.add_argument("--y_pred_output_filename", type=str, help="y_pred.txt")  
                 
 opt = parser.parse_args()
 
 dataset_dict = {
     "L1000_MCF7": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n203x962_celllineMCF7.f",
-    "ARCHS4_MCF7": "../data/Evaluation/ARCHS4_human_matrix_v9_n203x35238_celllineMCF7.f",
+    "ARCHS4_MCF7": "../data/Evaluation/ARCHS4_human_matrix_v9_n203x25312_celllineMCF7.f",
+    "ARCHS4_MCF7_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n203x962_celllineMCF7.f",
+
     "L1000_PC3": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n31x962_celllinePC3.f",
     "ARCHS4_PC3": "../data/Evaluation/ARCHS4_human_matrix_v9_n31x25312_celllinePC3.f",
+    "ARCHS4_PC3_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n31x962_celllinePC3.f",
+
     "L1000_A375": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n30x962_celllineA375.f",
     "ARCHS4_A375": "../data/Evaluation/ARCHS4_human_matrix_v9_n30x25312_celllineA375.f",
+    "ARCHS4_A375_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n30x962_celllineA375.f",
+    
     "L1000_HEPG2": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n7x962_celllineHEPG2.f",
     "ARCHS4_HEPG2": "../data/Evaluation/ARCHS4_human_matrix_v9_n7x25312_celllineHEPG2.f",
+    "ARCHS4_HEPG2_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n7x962_celllineHEPG2.f",
+    
     "L1000_VCAP": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n4x962_celllineVCAP.f",
     "ARCHS4_VCAP": "../data/Evaluation/ARCHS4_human_matrix_v9_n4x25312_celllineVCAP.f",
-
+    "ARCHS4_VCAP_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n4x962_celllineVCAP.f",
 
     "L1000": "../data/processed/L1000/L1000_filtered_GSE92742_Broad_LINCS_Level3_INF_mlr12k_n{}x{}.f",
-    "ARCHS4": "../data/processed/ARCHS4/human_matrix_v9_filtered_n{}x{}_{}.f",
+    "ARCHS4": "../data/processed/ARCHS4/human_matrix_v9_filtered_n50000x962_v2.f",
     "ARCHS4_full": "../data/processed/ARCHS4/human_matrix_v9_filtered_n{}x{}_step2_output.f",
-
+    "GTEx_L1000": "../data/processed/GTEx/GSE92743_Broad_GTEx_L1000_Level3_Q2NORM_filtered_n2929x962_v2.f",
+    "GTEx_RNAseq_landmark": "../data/processed/GTEx/GSE92743_Broad_GTEx_RNAseq_Log2RPKM_q2norm_filtered_n2929x962_v2.f",
 }
 
 # Create sample and checkpoint directories
@@ -260,7 +272,8 @@ def main():
                     data_fileB = dataset_dict[opt.dataset_nameB].format(opt.num_samples, opt.input_dimB)
                 else:
                     data_fileB = dataset_dict[opt.dataset_nameB].format(opt.num_samples, opt.input_dimB, opt.data_version)
-            
+            print(data_fileA)
+            print(data_fileB)
             l1000 = pd.read_feather(data_fileA)
             first_col = l1000.columns.tolist()[0]
             l1000.set_index(first_col, inplace=True)
@@ -330,15 +343,13 @@ def main():
                 optimizer_G.zero_grad()
                 # if opt.dataset_nameB != "ARCHS4_full":
                     # Identity loss
-                # loss_id_A = criterion_identity(G_BA(real_A), real_A)
-                # loss_id_B = criterion_identity(G_AB(real_B), real_B)
+                loss_id_A = criterion_identity(G_BA(real_A), real_A)
+                loss_id_B = criterion_identity(G_AB(real_B), real_B)
 
-                # loss_identity = (loss_id_A + loss_id_B) / 2
+                loss_identity = (loss_id_A + loss_id_B) / 2
                 # else:
                     # loss_identity = Tensor(np.zeros((real_A.size(0), 1)))
-                # GAN loss
-
-                
+                # GAN loss                
                 fake_B = G_AB(real_A)
                 # print("validA.shape", validA.shape)
                 # print("fakeB.shape", fake_B.shape)
@@ -358,7 +369,7 @@ def main():
                 loss_cycle = (loss_cycle_A + loss_cycle_B) / 2
 
                 # Total loss
-                loss_G = loss_GAN + opt.lambda_cyc * loss_cycle# + opt.lambda_id * loss_identity
+                loss_G = loss_GAN + opt.lambda_cyc * loss_cycle + opt.lambda_id * loss_identity
 
                 loss_G.backward()
                 optimizer_G.step()
@@ -479,12 +490,12 @@ def main():
                         else:
                             data_fileB = folder+filename
             else:
-                if opt.eval_dataset_nameA in dataset_dict:
-                    data_fileA = dataset_dict[opt.eval_dataset_nameA]
-                    data_fileB = dataset_dict[opt.eval_dataset_nameB]
-                else:
-                    data_fileA = f"../data/processed/{opt.eval_dataset_nameA}/GSE92743_Broad_GTEx_L1000_Level3_Q2NORM_filtered_n2929x962_{opt.data_version}.f"
-                    data_fileB = f"../data/processed/{opt.eval_dataset_nameB}/GSE92743_Broad_GTEx_RNAseq_Log2RPKM_q2norm_filtered_n2929x962_{opt.data_version}.f"
+                # if opt.eval_dataset_nameA in dataset_dict:
+                data_fileA = dataset_dict[opt.eval_dataset_nameA]
+                data_fileB = dataset_dict[opt.eval_dataset_nameB]
+                # else:
+                #     data_fileA = f"../data/processed/{opt.eval_dataset_nameA}/GSE92743_Broad_GTEx_L1000_Level3_Q2NORM_filtered_n2929x962_{opt.data_version}.f"
+                #     data_fileB = f"../data/processed/{opt.eval_dataset_nameB}/GSE92743_Broad_GTEx_RNAseq_Log2RPKM_q2norm_filtered_n2929x962_{opt.data_version}.f"
             print(data_fileA)
             print(data_fileB)
             
@@ -550,8 +561,8 @@ def main():
             print("\t".join(map(str, [item for item in scores.values()])))
 
             # save prediction results
-            save(real_B_total, folder=prediction_folder, filename="y_true.txt", shuffle=opt.shuffle)
-            save(fake_B_total, folder=prediction_folder, filename="y_pred.txt", shuffle=opt.shuffle)
+            save(real_B_total, folder=prediction_folder, filename=opt.y_true_output_filename, shuffle=opt.shuffle)
+            save(fake_B_total, folder=prediction_folder, filename=opt.y_pred_output_filename, shuffle=opt.shuffle)
             save(real_A_total, folder=prediction_folder, filename="y_input.txt", shuffle=opt.shuffle)
             # save(normalization(pd.DataFrame(real_B_total), z_normalization=True).values, filename="y_true.txt", shuffle=opt.shuffle)
             # save(normalization(pd.DataFrame(fake_B_total), z_normalization=True).values, filename="y_pred.txt", shuffle=opt.shuffle)
@@ -599,7 +610,7 @@ def main():
                 real_A_total.extend(real_A.cpu().detach().numpy()) 
                 fake_B_total.extend(fake_B.cpu().detach().numpy()) 
                 
-            save(fake_B_total, folder=prediction_folder, filename="y_pred.txt", shuffle=opt.shuffle)
+            save(fake_B_total, folder=prediction_folder, filename=opt.y_pred_output_filename, shuffle=opt.shuffle)
 
 if __name__ == "__main__":
     main()

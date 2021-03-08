@@ -123,7 +123,7 @@ class Extrapolator(nn.Module):
                 model.append(nn.ReLU())
             
         model.append(nn.Linear(hidden_dims[i], output_dim))
-        model.append(nn.ReLU())
+        # model.append(nn.ReLU())
         self.model = nn.Sequential(*model)
 
     def forward(self, x):
