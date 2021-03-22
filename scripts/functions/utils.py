@@ -1,20 +1,15 @@
 import random
-import time
-import datetime
-import sys
-
 from torch.autograd import Variable
 import torch
 import numpy as np
-
-from torchvision.utils import save_image
-
+import pandas as pd
 
 # evaluation
 from scipy import stats
 from scipy.stats import spearmanr, pearsonr
 from sklearn.metrics import r2_score, mean_squared_error, matthews_corrcoef, accuracy_score, roc_auc_score
 
+from maayanlab_bioinformatics.dge.characteristic_direction import characteristic_direction
 
 class ReplayBuffer:
     def __init__(self, max_size=50):
@@ -100,15 +95,30 @@ def normalization(data, logCPM_normalization=False, log_normalization=False, z_n
 
 
 
-def save(data, folder="./", filename = "y_true.txt", shuffle=False):
+def save(data, filename = "./y_true.txt", shuffle=False):
     if shuffle == True:
         filename = "shuffle_"+filename
+    if filename.endswith(".txt"):
+        print("Saving in txt...")
+        with open(filename, "w") as f1:
+            for i in range(len(data)):
+                f1.write("\t".join(map(str, data[i])))
+                f1.write("\n")
+    elif filename.endswith(".f"):
+        print("Saving in feather...")
+        data.reset_index().to_feather(filename)
+    print("Saved!", filename)
 
-    with open(folder+filename, "w") as f1:
-        for i in range(len(data)):
-            f1.write("\t".join(map(str, data[i])))
-            f1.write("\n")
-    print("Saved!", folder+filename)
+def save_df(data, filename = "./y_true.txt", shuffle=False):
+    if shuffle == True:
+        filename = "shuffle_"+filename
+    if filename.endswith(".txt"):
+        print("Saving in txt...")
+        data.to_csv(filename, sep="\t")
+    elif filename.endswith(".f"):
+        print("Saving in feather...")
+        data.reset_index().to_feather(filename)
+    print("Saved!", filename)
         
 from scipy.spatial import distance
 
@@ -147,79 +157,15 @@ def get_scores(y_true, y_pred):
     y_pred_prob_flatten = np.array(y_pred).ravel()
     scores_dict = dict()
 
-    # scores_dict["r2"] = list()
-    # scores_dict["rmse"] = list()
-    # scores_dict["pearson"] = list()
-    # scores_dict["spearmanr"] = list()
-    # scores_dict["jaccard_up"] = list()
-    # scores_dict["jaccard_down"] = list()
-    # scores_dict["precision_up"] = list()
-    # scores_dict["precision_down"] = list()
-    # scores_dict["recall_up"] = list()
-    # scores_dict["recall_down"] = list()
-    # scores_dict["f1_up"] = list()
-    # scores_dict["f1_down"] = list()
-
-
-    # for i in range(len(y_true)):
-    #     print(i)
-    #     tmp_y_true = y_true[i]
-    #     tmp_y_pred = y_pred[i]
-        # scores_dict["r2"].append(r2_score(tmp_y_true, tmp_y_pred))
-        # scores_dict["rmse"].append(mean_squared_error(tmp_y_true, tmp_y_pred, squared=False))
-        # scores_dict["pearson"].append(pearsonr(tmp_y_true, tmp_y_pred)[0])
-        # scores_dict["spearmanr"].append(spearmanr(tmp_y_true, tmp_y_pred)[0])
-   
-    # temporary commented out
-    # true_zscore_all = normalization(pd.DataFrame(y_true), z_normalization=True).values
-    # pred_zscore_all = normalization(pd.DataFrame(y_pred), z_normalization=True).values
-    
-    # for i in range(len(true_zscore_all)):
-    
-    #     true_zscore = true_zscore_all[i]
-    #     pred_zscore = pred_zscore_all[i]
-
-    #     true_zscore_up = [i for i, x in enumerate(true_zscore) if x > 2]
-    #     true_zscore_down = [i for i, x in enumerate(true_zscore) if x < -2]
-
-    #     pred_zscore_up = [i for i, x in enumerate(pred_zscore) if x > 2]
-    #     pred_zscore_down = [i for i, x in enumerate(pred_zscore) if x > -2]
-    #     scores_dict["jaccard_up"].append(jaccard(true_zscore_up, pred_zscore_up))
-    #     scores_dict["jaccard_down"].append(jaccard(true_zscore_down, pred_zscore_down))
-
-    #     scores_dict["precision_up"].append(precision(true_zscore_up, pred_zscore_up))
-    #     scores_dict["precision_down"].append(precision(true_zscore_down, pred_zscore_down))
-
-    #     scores_dict["recall_up"].append(recall(true_zscore_up, pred_zscore_up))
-    #     scores_dict["recall_down"].append(recall(true_zscore_down, pred_zscore_down))
-
-    #     scores_dict["f1_up"].append(f1score(true_zscore_up, pred_zscore_up))
-    #     scores_dict["f1_down"].append(f1score(true_zscore_down, pred_zscore_down))
-
-
-
-        # break
-    # scores_dict["r2"] = get_average(scores_dict["r2"])
-    # scores_dict["rmse"] = get_average(scores_dict["rmse"])
     scores_dict["r2"] = r2_score(y_true, y_pred)
     scores_dict["rmse"] = mean_squared_error(y_true, y_pred, squared=True)
     scores_dict["pearson"] = pearsonr(y_true_flatten, y_pred_prob_flatten)[0]
     scores_dict["spearmanr"] = spearmanr(y_true_flatten, y_pred_prob_flatten)[0]
 
-    # scores_dict["pearson"] = get_average(scores_dict["pearson"])
-    # scores_dict["spearmanr"] = get_average(scores_dict["spearmanr"])
-    # scores_dict["jaccard_up"] = get_average(scores_dict["jaccard_up"])
-    # scores_dict["jaccard_down"] = get_average(scores_dict["jaccard_down"])
-    # scores_dict["precision_up"] = get_average(scores_dict["precision_up"])
-    # scores_dict["precision_down"] = get_average(scores_dict["precision_down"])
-    # scores_dict["recall_up"] = get_average(scores_dict["recall_up"])
-    # scores_dict["recall_down"] = get_average(scores_dict["recall_down"])
-    # scores_dict["f1_up"] = get_average(scores_dict["f1_up"])
-    # scores_dict["f1_down"] = get_average(scores_dict["f1_down"])
-
     return scores_dict
 
 def get_average(ls):
     return sum(ls)/len(ls)
+
 
 

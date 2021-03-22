@@ -1,16 +1,8 @@
 import argparse
 import os
 import numpy as np
-import math
-import itertools
-import datetime
-import time
 import pandas as pd
 import json
-
-import torchvision.transforms as transforms
-from torchvision.utils import save_image, make_grid
-
 from torch.utils.data import DataLoader, TensorDataset
 from torchvision import datasets
 from torch.autograd import Variable
@@ -28,7 +20,6 @@ from sklearn.model_selection import train_test_split
 from scipy import stats
 from scipy.stats import spearmanr, pearsonr
 from sklearn.metrics import r2_score, mean_squared_error, matthews_corrcoef, accuracy_score, roc_auc_score
-
 
 import wandb
 import sys
@@ -77,13 +68,11 @@ parser.add_argument("--eval_output_dataset_name", type=str, default="GTEx",
                 
 parser.add_argument("--eval_exp_index", type=int, default="8",
                     help="eval_exp_index")
-parser.add_argument("--eval_input_filename", type=str, default="y_pred_L1000_MCF7.txt",
-                    help="eval_input_filename")
 
 
 parser.add_argument("--exp_index", type=int, default=0,
                     help="index of experiment")                    
-parser.add_argument('--ispredicting',  default=False, help='istest', action='store_true')                  
+parser.add_argument('--ispredicting',  default=False, help='predict or train?', action='store_true')  # predict or                 
 parser.add_argument("--cell_line", type=str, help="cell_line")  
 parser.add_argument("--gamma", type=float, default=0.5,
                     help="step lr ratio")
@@ -99,8 +88,12 @@ parser.add_argument('--early_stopping_epoch',  default=3, help='early_stopping_e
 parser.add_argument("--early_stopping_tol", type=float, default=0.1,
                     help="early_stopping_tol")  
 
+parser.add_argument('--evaluation',  default=False, help='calculate scores or just predict?', action='store_true')        
 
-                
+parser.add_argument("--prediction_folder", type=str, default="./", help="prediction_folder")
+
+parser.add_argument("--output_gene_list", type=str, default="../data/ARCHS4/high_count_gene_list.txt", help="output_gene_list")
+
 opt = parser.parse_args()
 
 dataset_dict = {
@@ -130,7 +123,8 @@ dataset_dict = {
     "ARCHS4_VCAP_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n4x962_celllineVCAP.f",
 
     "GTEx_L1000": "../data/processed/GTEx/GSE92743_Broad_GTEx_L1000_Level3_Q2NORM_filtered_n2929x962_v2.f",
-    "GTEx_RNAseq": "../data/processed/GTEx/GSE92743_Broad_GTEx_RNAseq_Log2RPKM_q2norm_filtered_n2929x962_v2.f",
+    "GTEx_RNAseq_landmark": "../data/processed/GTEx/GSE92743_Broad_GTEx_RNAseq_Log2RPKM_q2norm_filtered_n2929x962_v2.f",
+    "GTEx_RNAseq": "../data/processed/GTEx/GSE92743_Broad_GTEx_RNAseq_Log2RPKM_q2norm_filtered_n2929x25312_v2.f",
     "step1": "../output/{}/prediction/{}"
 
 }
@@ -138,7 +132,8 @@ dataset_dict = {
 # Create sample and checkpoint directories
 model_folder = f"saved_models_step2/{opt.exp_index}/"
 log_folder = f"../output_step2/{opt.exp_index}/logs/"
-prediction_folder = f"../output_step2/{opt.exp_index}/prediction/"
+# prediction_folder = f"../output_step2/{opt.exp_index}/prediction/"
+prediction_folder = opt.prediction_folder
 visualization_folder = f"../output_step2/{opt.exp_index}/viz/"
 if opt.ispredicting == False:
     wandb.init(project="L1000toRNAseq_step2")
@@ -225,9 +220,10 @@ def main():
         
         print(input_data_file)
         print(input_data.shape)
+        print(input_data)
         print(output_data_file)
         print(output_data.shape)
-
+        print(output_data)
         # data split
         input_data_train, input_data_test, output_data_train, output_data_test = data_split(input_data, output_data, n_samples = int(input_data.shape[0]*opt.test_ratio))
         input_data_train, input_data_valid, output_data_train, output_data_valid = data_split(input_data_train, output_data_train, n_samples = int(input_data.shape[0]*opt.valid_ratio))
@@ -282,8 +278,8 @@ def main():
                         early_stopping_count = 0
                         # Save model checkpoints
                         torch.save(E.state_dict(), model_folder+"E.pth")
-                        save(val_pred, folder=prediction_folder, filename=opt.y_pred_output_filename, shuffle=opt.shuffle)
-                        save(val_labels, folder=prediction_folder, filename=opt.y_true_output_filename, shuffle=opt.shuffle)
+                        save(val_pred, filename=prediction_folder+opt.y_pred_output_filename, shuffle=opt.shuffle)
+                        save(val_labels, filename=prediction_folder+opt.y_true_output_filename, shuffle=opt.shuffle)
                         
                     else:
                         early_stopping_count += 1
@@ -311,65 +307,135 @@ def main():
         #  Predicting
         # ----------
         # load datasets
-        data_fileA = dataset_dict[opt.eval_input_dataset_name]
-        data_fileB = dataset_dict[opt.eval_output_dataset_name]
-        if opt.eval_input_dataset_name == "step1":
-            data_fileA = dataset_dict[opt.eval_input_dataset_name].format(opt.eval_exp_index, opt.eval_input_filename)
-            data_fileB = dataset_dict[opt.eval_output_dataset_name] # y_true
 
+        if opt.evaluation == False:
 
-        print(data_fileA)
-        print(data_fileB)
-        
-        if data_fileA.endswith(".f"):
-            input = pd.read_feather(data_fileA)
-            first_col = input.columns.tolist()[0]
-            input.set_index(first_col, inplace=True)
-        else:
-            input = pd.read_csv(data_fileA, sep="\t")
-        output = pd.read_feather(data_fileB)
-        first_col = output.columns.tolist()[0]
-        output.set_index(first_col, inplace=True)
-        input_tensor = torch.FloatTensor(input.values)
-        output_tensor = torch.FloatTensor(output.values)
-        if opt.shuffle == True:
-            output_tensor=output_tensor[:,torch.randperm(output_tensor.size()[1])]
+            if opt.eval_input_dataset_name in dataset_dict:
+                data_fileA = dataset_dict[opt.eval_input_dataset_name]
+            else:
+                data_fileA = opt.eval_input_dataset_name
 
-        dataloaderA = DataLoader(
-            TensorDataset(input_tensor),
-            batch_size=opt.batch_size,
-            num_workers=opt.n_cpu,
-        )
-        dataloaderB = DataLoader(
-            TensorDataset(output_tensor),
-            batch_size=opt.batch_size,
-            num_workers=opt.n_cpu,
-        )
+            print(data_fileA)
 
-        # load model
-        E.load_state_dict(torch.load(model_folder+"E.pth"))
-        E.eval()
-
-        y_true = list()
-        predictions = list()
-        for i, (batchA, batchB) in enumerate(zip(dataloaderA, dataloaderB)):
-            # Set model input
-            input_batch = batchA[0].cuda()  # number of samples in category A
-            y_true_batch = batchB[0].cuda()
-    
-            pred = E(input_batch)
+            if data_fileA.endswith(".f"):
+                input = pd.read_feather(data_fileA)
+                first_col = input.columns.tolist()[0]
+                input.set_index(first_col, inplace=True)
+            else:
+                input = pd.read_csv(data_fileA, sep="\t", index_col=0)
+            print(input)
+            input_tensor = torch.FloatTensor(input.values)
             
-            y_true.extend(y_true_batch.cpu().detach().numpy()) 
-            predictions.extend(pred.cpu().detach().numpy()) 
-        scores = get_scores(y_true, predictions)
+            dataloaderA = DataLoader(
+                TensorDataset(input_tensor),
+                batch_size=opt.batch_size,
+                num_workers=opt.n_cpu,
+            )
+            
+            # load model
+            E.load_state_dict(torch.load(model_folder+"E.pth"))
+            E.eval()
 
-        print("/".join(scores.keys()))
-        # print("\t".join(map(str, [round(item, 4) for item in scores.values()])))
-        print("\t".join(map(str, [item for item in scores.values()])))
+            predictions = list()
+            for i, (batchA) in enumerate(dataloaderA):
+                # Set model input
+                input_batch = batchA[0].cuda()  # number of samples in category A  
+                pred = E(input_batch)                
+                predictions.extend(pred.cpu().detach().numpy()) 
+            
+            # save prediction results
+            with open(opt.output_gene_list, "r") as f:
+                gene_list = [x.strip() for x in f.readlines()]
+                # gene_list = sorted(gene_list)
+            sample_list = input.index.tolist()
+            prediction_df = pd.DataFrame(predictions, index=sample_list, columns=gene_list)
 
-        # save prediction results
-        save(y_true, folder=prediction_folder, filename=opt.y_true_output_filename, shuffle=opt.shuffle)
-        save(predictions, folder=prediction_folder, filename=opt.y_pred_output_filename, shuffle=opt.shuffle)
+            # make negative values to zeros
+            prediction_df[prediction_df<0]=0
+            print("prediction")
+            print(prediction_df)
+            print(prediction_df.shape)
+            # prediction_df = prediction_df.iloc[:5, :]
+            save_df(prediction_df, filename=prediction_folder+opt.y_pred_output_filename, shuffle=opt.shuffle)
+
+
+        else: ## evaluation == True
+            if opt.eval_input_dataset_name in dataset_dict:
+                data_fileA = dataset_dict[opt.eval_input_dataset_name]
+            else:
+                data_fileA = opt.eval_input_dataset_name
+            
+            if opt.eval_output_dataset_name in dataset_dict:
+                data_fileB = dataset_dict[opt.eval_output_dataset_name]
+            else:
+                data_fileB = opt.eval_output_dataset_name
+            print(data_fileA)
+            print(data_fileB)
+
+            output = pd.read_feather(data_fileB)
+            first_col = output.columns.tolist()[0]
+            output.set_index(first_col, inplace=True)
+            # output = output.sort_index(axis=1)
+            if data_fileA.endswith(".f"):
+                input = pd.read_feather(data_fileA)
+                first_col = input.columns.tolist()[0]
+                input.set_index(first_col, inplace=True)
+            else:
+                input = pd.read_csv(data_fileA, sep="\t", index_col=0)
+            print("input")
+            print(input)
+        
+            input_tensor = torch.FloatTensor(input.values)
+            output_tensor = torch.FloatTensor(output.values)
+            if opt.shuffle == True:
+                output_tensor=output_tensor[:,torch.randperm(output_tensor.size()[1])]
+
+            dataloaderA = DataLoader(
+                TensorDataset(input_tensor),
+                batch_size=opt.batch_size,
+                num_workers=opt.n_cpu,
+            )
+            dataloaderB = DataLoader(
+                TensorDataset(output_tensor),
+                batch_size=opt.batch_size,
+                num_workers=opt.n_cpu,
+            )
+
+            # load model
+            E.load_state_dict(torch.load(model_folder+"E.pth"))
+            E.eval()
+
+            y_true = list()
+            predictions = list()
+            for i, (batchA, batchB) in enumerate(zip(dataloaderA, dataloaderB)):
+                # Set model input
+                input_batch = batchA[0].cuda()  # number of samples in category A
+                y_true_batch = batchB[0].cuda()
+        
+                pred = E(input_batch)
+                
+                y_true.extend(y_true_batch.cpu().detach().numpy()) 
+                predictions.extend(pred.cpu().detach().numpy()) 
+            scores = get_scores(y_true, predictions)
+
+            print("/".join(scores.keys()))
+            # print("\t".join(map(str, [round(item, 4) for item in scores.values()])))
+            print("\t".join(map(str, [item for item in scores.values()])))
+            print("prediction")
+            # save prediction results
+            with open(opt.output_gene_list, "r") as f:
+                gene_list = [x.strip() for x in f.readlines()]
+                # gene_list = sorted(gene_list)
+            sample_list = input.index.tolist()
+            prediction_df = pd.DataFrame(predictions, index=sample_list, columns=gene_list)
+            print("prediction")
+            print(prediction_df)
+
+            print("answer")
+            print(output)
+            # save prediction results
+            save(y_true, filename=prediction_folder+opt.y_true_output_filename, shuffle=opt.shuffle)
+            save_df(prediction_df, filename=prediction_folder+opt.y_pred_output_filename, shuffle=opt.shuffle)
 
 
 def train_step(model, criterion, optimizer, input_tensor_train, output_tensor_train):

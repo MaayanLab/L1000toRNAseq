@@ -1,15 +1,11 @@
 import argparse
 import os
 import numpy as np
-import math
 import itertools
 import datetime
 import time
 import pandas as pd
 import json
-
-import torchvision.transforms as transforms
-from torchvision.utils import save_image, make_grid
 
 from torch.utils.data import DataLoader, TensorDataset
 from torchvision import datasets
@@ -17,12 +13,12 @@ from torch.autograd import Variable
 
 from models_transcript import *
 from utils import *
-import torchnlp
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
+import sys
 
-
+import wandb
 parser = argparse.ArgumentParser()
 parser.add_argument("--epoch_resume", type=int, default=0,
                     help="epoch to start training from")
@@ -40,6 +36,10 @@ parser.add_argument("--b1", type=float, default=0.9,
                     help="adam: decay of first order momentum of gradient")
 parser.add_argument("--b2", type=float, default=0.999,
                     help="adam: decay of first order momentum of gradient")
+parser.add_argument("--weight_decay", type=float, default=0.00001,
+                    help="l2 regularization")
+
+
 parser.add_argument("--decay_epoch", type=int, default=100,
                     help="epoch from which to start lr decay")
 parser.add_argument("--n_cpu", type=int, default=8,
@@ -84,11 +84,11 @@ parser.add_argument("--gamma", type=float, default=0.1,
                     help="step lr ratio")
 parser.add_argument('--shuffle',  default=False, help='shuffle', action='store_true') 
 parser.add_argument('--evaluation',  default=False, help='evaluation', action='store_true')         
-parser.add_argument("--data_version", type=str, default="v2",
-                    help="data_version")
+
 
 parser.add_argument("--y_true_output_filename", type=str, help="y_true.txt")
 parser.add_argument("--y_pred_output_filename", type=str, help="y_pred.txt")  
+parser.add_argument("--prediction_folder", type=str, default="./", help="prediction_folder")
                 
 opt = parser.parse_args()
 
@@ -123,9 +123,11 @@ dataset_dict = {
 # Create sample and checkpoint directories
 model_folder = f"saved_models/{opt.exp_index}/"
 log_folder = f"../output/{opt.exp_index}/logs/"
-prediction_folder = f"../output/{opt.exp_index}/prediction/"
+# prediction_folder = f"../output/{opt.exp_index}/prediction/"
+prediction_folder = opt.prediction_folder
 visualization_folder = f"../output/{opt.exp_index}/viz/"
 if opt.ispredicting == False:
+    wandb.init(project="L1000toRNAseq_step1")
     os.makedirs(model_folder, exist_ok=False)
     os.makedirs(log_folder, exist_ok=False)
     os.makedirs(prediction_folder, exist_ok=False)
@@ -210,12 +212,12 @@ def main():
 
     # Optimizers
     optimizer_G = torch.optim.Adam(
-        itertools.chain(G_AB.parameters(), G_BA.parameters()), lr=opt.lr, betas=(opt.b1, opt.b2)
+        itertools.chain(G_AB.parameters(), G_BA.parameters()), lr=opt.lr, betas=(opt.b1, opt.b2), weight_decay=opt.weight_decay
     )
     optimizer_D_A = torch.optim.Adam(
-        D_A.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
+        D_A.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2), weight_decay=opt.weight_decay)
     optimizer_D_B = torch.optim.Adam(
-        D_B.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
+        D_B.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2), weight_decay=opt.weight_decay)
 
     # Learning rate update schedulers
     # lr_scheduler_G = torch.optim.lr_scheduler.LambdaLR(
@@ -249,10 +251,6 @@ def main():
     # Training data loader
     if opt.ispredicting == False:
 
-        # data_file = os.path.join("../data/%s" % opt.dataset_nameA +
-        #                          "/train/A/all-pseudomonas-gene-normalized.zip")
-        # rnaseq = pd.read_table(data_file, index_col=0, header=0).T
-
         if opt.dataset_nameA == "pseudomonas":
             data_fileA = os.path.join("../data/%s" % opt.dataset_nameA +
                                  "/train/A/all-pseudomonas-gene-normalized.zip")
@@ -262,32 +260,30 @@ def main():
 
             rnaseq = pd.read_table(data_fileB, index_col=0, header=0).T
         else:
-            if opt.cell_line is not None and opt.cell_line != "None" and opt.cell_line != "":
-                data_fileA = f"../data/processed/{opt.dataset_nameA}/L1000_filtered_GSE92742_Broad_LINCS_Level3_INF_mlr12k_n{opt.num_samples}x{opt.input_dimA}_cellline_{opt.cell_line}.f"
-                data_fileB = f"../data/processed/{opt.dataset_nameB}/human_matrix_v9_filtered_n{opt.num_samples}x{opt.input_dimA}_{opt.data_version}.f"
-            else:
-                data_fileA = dataset_dict[opt.dataset_nameA].format(opt.num_samples, opt.input_dimA)
-                    
-                if opt.dataset_nameB == "ARCHS4_full":
-                    data_fileB = dataset_dict[opt.dataset_nameB].format(opt.num_samples, opt.input_dimB)
-                else:
-                    data_fileB = dataset_dict[opt.dataset_nameB].format(opt.num_samples, opt.input_dimB, opt.data_version)
+            
+            data_fileA = dataset_dict[opt.dataset_nameA].format(opt.num_samples, opt.input_dimA)
+            data_fileB = dataset_dict[opt.dataset_nameB].format(opt.num_samples, opt.input_dimB)
+
             print(data_fileA)
             print(data_fileB)
+
             l1000 = pd.read_feather(data_fileA)
             first_col = l1000.columns.tolist()[0]
             l1000.set_index(first_col, inplace=True)
+            
 
             rnaseq = pd.read_feather(data_fileB)
             first_col = rnaseq.columns.tolist()[0]
             rnaseq.set_index(first_col, inplace=True)
+
+        # sort by column names
+        l1000 = l1000.sort_index(axis=1)
+        rnaseq = rnaseq.sort_index(axis=1)
+        print(l1000)
         print(rnaseq)
         l1000_tensor = torch.FloatTensor(l1000.values)
         rnaseq_tensor = torch.FloatTensor(rnaseq.values)
         print(rnaseq.shape)
-
-        # query biofilm in pandas space
-        # grab the indicies from that
 
 
         dataloaderA = DataLoader(
@@ -307,8 +303,6 @@ def main():
         #  Training
         # ----------
 
-        # loss_G_perEpoch = np.zeros([1, opt.n_epochs])
-        # loss_D_perEpoch = np.zeros([1, opt.n_epochs])
 
         loss_G_perEpoch = list()
         loss_D_perEpoch = list()
@@ -319,9 +313,13 @@ def main():
             for i, (batchA, batchB) in enumerate(zip(dataloaderA, dataloaderB)):
 
                 # Set model input
-                real_A = batchA[0].cuda()  # number of samples in category A
-                real_B = batchB[0].cuda()
-                
+                if cuda:
+                    real_A = batchA[0].cuda()  # number of samples in category A
+                    real_B = batchB[0].cuda()
+                else:
+                    real_A = batchA[0]
+                    real_B = batchB[0]
+
                 # Adversarial ground truths
                 validA = Variable(
                     Tensor(np.ones((real_A.size(0), 1))), requires_grad=False)
@@ -341,19 +339,15 @@ def main():
                 G_BA.train()
 
                 optimizer_G.zero_grad()
-                # if opt.dataset_nameB != "ARCHS4_full":
-                    # Identity loss
+                
+                # Identity loss
                 loss_id_A = criterion_identity(G_BA(real_A), real_A)
                 loss_id_B = criterion_identity(G_AB(real_B), real_B)
 
                 loss_identity = (loss_id_A + loss_id_B) / 2
-                # else:
-                    # loss_identity = Tensor(np.zeros((real_A.size(0), 1)))
+                
                 # GAN loss                
                 fake_B = G_AB(real_A)
-                # print("validA.shape", validA.shape)
-                # print("fakeB.shape", fake_B.shape)
-                # print("D_B(fake_B).shape", D_B(fake_B).shape)
                 loss_GAN_AB = criterion_GAN(D_B(fake_B), validA)
                 fake_A = G_BA(real_B)
                 loss_GAN_BA = criterion_GAN(D_A(fake_A), validA)
@@ -425,7 +419,7 @@ def main():
 
                 # Print log
                 sys.stdout.write(
-                    "\r[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f, adv: %f, cycle: %f] ETA: %s"#, identity: %f] ETA: %s"
+                    "\r[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f, adv: %f, cycle: %f, identity: %f] ETA: %s"
                     % (
                         epoch+1,
                         opt.n_epochs,
@@ -435,25 +429,23 @@ def main():
                         loss_G.item(),
                         loss_GAN.item(),
                         loss_cycle.item(),
-                        # loss_identity.item(),
+                        loss_identity.item(),
                         time_left,
                     )
                 )
-            # print("")
+            wandb.log({"D loss": loss_D.item(), "G Loss": loss_G.item(), "GAN loss": loss_GAN.item()})
 
             # Save loss_G and loss_D per epoch
             loss_G_perEpoch.append(loss_G.item())
             loss_D_perEpoch.append(loss_D.item())
-            # If at sample interval save image
-            # if batches_done % opt.sample_interval == 0:
-            #    sample_images(batches_done)
+            
 
             # Update learning rates
             lr_scheduler_G.step()
             lr_scheduler_D_A.step()
             lr_scheduler_D_B.step()
 
-            if opt.checkpoint_interval != -1 and epoch % opt.checkpoint_interval == 0:
+            if opt.checkpoint_interval != -1 and epoch % opt.checkpoint_interval == opt.checkpoint_interval-1:
                 # Save model checkpoints
                 torch.save(G_AB.state_dict(), model_folder+"G_AB_%d.pth" %
                         (epoch))
@@ -463,6 +455,9 @@ def main():
                         (epoch))
                 torch.save(D_B.state_dict(), model_folder+"D_B_%d.pth" %
                         (epoch))
+
+                # benchmark evaluation
+                
 
         # Write loss arrays to file
         G_loss_file = os.path.join(log_folder+"G_loss.txt")
@@ -490,12 +485,12 @@ def main():
                         else:
                             data_fileB = folder+filename
             else:
-                # if opt.eval_dataset_nameA in dataset_dict:
-                data_fileA = dataset_dict[opt.eval_dataset_nameA]
-                data_fileB = dataset_dict[opt.eval_dataset_nameB]
-                # else:
-                #     data_fileA = f"../data/processed/{opt.eval_dataset_nameA}/GSE92743_Broad_GTEx_L1000_Level3_Q2NORM_filtered_n2929x962_{opt.data_version}.f"
-                #     data_fileB = f"../data/processed/{opt.eval_dataset_nameB}/GSE92743_Broad_GTEx_RNAseq_Log2RPKM_q2norm_filtered_n2929x962_{opt.data_version}.f"
+                if opt.eval_dataset_nameA in dataset_dict:
+                    data_fileA = dataset_dict[opt.eval_dataset_nameA]
+                    data_fileB = dataset_dict[opt.eval_dataset_nameB]
+                else:
+                    data_fileA = opt.eval_dataset_nameA
+                    data_fileB = opt.eval_dataset_nameB
             print(data_fileA)
             print(data_fileB)
             
@@ -503,10 +498,17 @@ def main():
             l1000 = pd.read_feather(data_fileA)
             first_col = l1000.columns.tolist()[0]
             l1000.set_index(first_col, inplace=True)
+            l1000 = l1000.sort_index(axis=1)
+
+            l1000_samplenames = l1000.index.tolist()
+            l1000_featurenames = l1000.columns.tolist()
+
 
             rnaseq = pd.read_feather(data_fileB)
             first_col = rnaseq.columns.tolist()[0]
             rnaseq.set_index(first_col, inplace=True)
+            rnaseq = rnaseq.sort_index(axis=1)
+            
             l1000_tensor = torch.FloatTensor(l1000.values)
             rnaseq_tensor = torch.FloatTensor(rnaseq.values)
             if opt.shuffle == True:
@@ -543,8 +545,12 @@ def main():
 
             for i, (batchA, batchB) in enumerate(zip(dataloaderA, dataloaderB)):
                 # Set model input
-                real_A = batchA[0].cuda()  # number of samples in category A
-                real_B = batchB[0].cuda()
+                if cuda:
+                    real_A = batchA[0].cuda()  # number of samples in category A
+                    real_B = batchB[0].cuda()
+                else:
+                    real_A = batchA[0]
+                    real_B = batchB[0]
         
                 fake_B = G_AB(real_A)
                 fake_B = torch.reshape(fake_B, (real_B.shape[0], real_B.shape[1]))
@@ -560,28 +566,34 @@ def main():
             # print("\t".join(map(str, [round(item, 4) for item in scores.values()])))
             print("\t".join(map(str, [item for item in scores.values()])))
 
+            real_B_total_df = pd.DataFrame(real_B_total, index=l1000_samplenames, columns=l1000_featurenames)
+            fake_B_total_df = pd.DataFrame(fake_B_total, index=l1000_samplenames, columns=l1000_featurenames)
+            real_A_total_df = pd.DataFrame(real_A_total, index=l1000_samplenames, columns=l1000_featurenames)
+
             # save prediction results
-            save(real_B_total, folder=prediction_folder, filename=opt.y_true_output_filename, shuffle=opt.shuffle)
-            save(fake_B_total, folder=prediction_folder, filename=opt.y_pred_output_filename, shuffle=opt.shuffle)
-            save(real_A_total, folder=prediction_folder, filename="y_input.txt", shuffle=opt.shuffle)
-            # save(normalization(pd.DataFrame(real_B_total), z_normalization=True).values, filename="y_true.txt", shuffle=opt.shuffle)
-            # save(normalization(pd.DataFrame(fake_B_total), z_normalization=True).values, filename="y_pred.txt", shuffle=opt.shuffle)
-            # save(normalization(pd.DataFrame(real_A_total), z_normalization=True).values, filename="y_input.txt", shuffle=opt.shuffle)
+            save_df(real_B_total_df, filename=prediction_folder+opt.y_true_output_filename, shuffle=opt.shuffle)
+            save_df(fake_B_total_df, filename=prediction_folder+opt.y_pred_output_filename, shuffle=opt.shuffle)
+            save_df(real_A_total_df, filename=prediction_folder+"y_input.txt", shuffle=opt.shuffle)
 
 
         else: # evaluation == False
             if opt.eval_dataset_nameA in dataset_dict:
                 data_fileA = dataset_dict[opt.eval_dataset_nameA]
             else:
-                data_fileA = f"../data/processed/{opt.eval_dataset_nameA}/GSE92743_Broad_GTEx_L1000_Level3_Q2NORM_filtered_n2929x962_{opt.data_version}.f"
-                data_fileB = f"../data/processed/{opt.eval_dataset_nameB}/GSE92743_Broad_GTEx_RNAseq_Log2RPKM_q2norm_filtered_n2929x962_{opt.data_version}.f"
+                data_fileA = opt.eval_dataset_nameA
+
             print(data_fileA)
             
 
-            l1000 = pd.read_feather(data_fileA)
+            l1000 = pd.read_feather(data_fileA) # sample x feature
             first_col = l1000.columns.tolist()[0]
             l1000.set_index(first_col, inplace=True)
-
+            l1000 = l1000.sort_index(axis=1)
+            l1000_samplenames = l1000.index.tolist()
+            l1000_featurenames = l1000.columns.tolist()
+            print("input")
+            print(l1000)
+            
             l1000_tensor = torch.FloatTensor(l1000.values)
             
             dataloaderA = DataLoader(
@@ -595,22 +607,26 @@ def main():
                             (opt.load_model_index)))
             G_AB.eval()
 
-
-
             real_A_total = list()
             fake_B_total = list() # prediction of A
             
             for i, (batchA) in enumerate(dataloaderA):
                 # Set model input
-                real_A = batchA[0].cuda()  # number of samples in category A
+                if cuda:
+                    real_A = batchA[0].cuda()  # number of samples in category A
+                else:
+                    real_A = batchA[0]
         
                 fake_B = G_AB(real_A)
                 fake_B = torch.reshape(fake_B, (real_A.shape[0], real_A.shape[1]))
                 
                 real_A_total.extend(real_A.cpu().detach().numpy()) 
                 fake_B_total.extend(fake_B.cpu().detach().numpy()) 
-                
-            save(fake_B_total, folder=prediction_folder, filename=opt.y_pred_output_filename, shuffle=opt.shuffle)
+
+            fake_B_total_df = pd.DataFrame(fake_B_total, index=l1000_samplenames, columns=l1000_featurenames)
+            print("output")
+            print(fake_B_total_df)
+            save_df(fake_B_total_df, filename=prediction_folder+opt.y_pred_output_filename, shuffle=opt.shuffle)
 
 if __name__ == "__main__":
     main()
