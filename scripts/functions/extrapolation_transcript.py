@@ -92,14 +92,14 @@ parser.add_argument('--evaluation',  default=False, help='calculate scores or ju
 
 parser.add_argument("--prediction_folder", type=str, default="./", help="prediction_folder")
 
-parser.add_argument("--output_gene_list", type=str, default="../data/ARCHS4/high_count_gene_list.txt", help="output_gene_list")
+parser.add_argument("--output_gene_list", type=str, default="prediction_gene_list.txt", help="output_gene_list")
 
 opt = parser.parse_args()
 
 dataset_dict = {
 
     "ARCHS4_50000_input": "../data/processed/ARCHS4/human_matrix_v9_filtered_n50000x962_v2.f",
-    "ARCHS4_50000_output": "../data/processed/ARCHS4/human_matrix_v9_filtered_n50000x25312_v2.f",
+    "ARCHS4_50000_output": "../data/processed/ARCHS4/human_matrix_v9_filtered_n50000x23614_v2.f",
 
 
     "L1000_MCF7": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n203x962_celllineMCF7.f",
@@ -124,7 +124,7 @@ dataset_dict = {
 
     "GTEx_L1000": "../data/processed/GTEx/GSE92743_Broad_GTEx_L1000_Level3_Q2NORM_filtered_n2929x962_v2.f",
     "GTEx_RNAseq_landmark": "../data/processed/GTEx/GSE92743_Broad_GTEx_RNAseq_Log2RPKM_q2norm_filtered_n2929x962_v2.f",
-    "GTEx_RNAseq": "../data/processed/GTEx/GSE92743_Broad_GTEx_RNAseq_Log2RPKM_q2norm_filtered_n2929x25312_v2.f",
+    "GTEx_RNAseq": "../data/processed/GTEx/GSE92743_Broad_GTEx_RNAseq_Log2RPKM_q2norm_filtered_n2929x22240_v2.f",
     "step1": "../output/{}/prediction/{}"
 
 }
@@ -343,13 +343,14 @@ def main():
                 pred = E(input_batch)                
                 predictions.extend(pred.cpu().detach().numpy()) 
             
-            # save prediction results
-            with open(opt.output_gene_list, "r") as f:
+            # load gene list
+            with open(prediction_folder+opt.output_gene_list, "r") as f:
                 gene_list = [x.strip() for x in f.readlines()]
-                # gene_list = sorted(gene_list)
+                gene_list = sorted(gene_list)
+
             sample_list = input.index.tolist()
             prediction_df = pd.DataFrame(predictions, index=sample_list, columns=gene_list)
-
+            
             # make negative values to zeros
             prediction_df[prediction_df<0]=0
             print("prediction")
@@ -375,7 +376,8 @@ def main():
             output = pd.read_feather(data_fileB)
             first_col = output.columns.tolist()[0]
             output.set_index(first_col, inplace=True)
-            # output = output.sort_index(axis=1)
+            output = output.sort_index(axis=1)
+
             if data_fileA.endswith(".f"):
                 input = pd.read_feather(data_fileA)
                 first_col = input.columns.tolist()[0]
@@ -416,18 +418,28 @@ def main():
                 
                 y_true.extend(y_true_batch.cpu().detach().numpy()) 
                 predictions.extend(pred.cpu().detach().numpy()) 
-            scores = get_scores(y_true, predictions)
-
-            print("/".join(scores.keys()))
-            # print("\t".join(map(str, [round(item, 4) for item in scores.values()])))
-            print("\t".join(map(str, [item for item in scores.values()])))
-            print("prediction")
-            # save prediction results
-            with open(opt.output_gene_list, "r") as f:
+            
+            # load gene list
+            with open(prediction_folder+opt.output_gene_list, "r") as f:
                 gene_list = [x.strip() for x in f.readlines()]
-                # gene_list = sorted(gene_list)
+                gene_list = sorted(gene_list)
+
             sample_list = input.index.tolist()
             prediction_df = pd.DataFrame(predictions, index=sample_list, columns=gene_list)
+
+            common_genes = sorted(list(set(output.columns.tolist()).intersection(set(prediction_df.columns.tolist()))))
+
+            output_filtered = output.loc[:, common_genes]
+            prediction_df_filtered = prediction_df.loc[:, common_genes]
+
+            scores = get_scores(output_filtered.values, prediction_df_filtered.values)
+
+            print("/".join(scores.keys()))
+            print("\t".join(map(str, [item for item in scores.values()])))
+            
+            
+
+
             print("prediction")
             print(prediction_df)
 

@@ -89,6 +89,8 @@ parser.add_argument('--evaluation',  default=False, help='evaluation', action='s
 parser.add_argument("--y_true_output_filename", type=str, help="y_true.txt")
 parser.add_argument("--y_pred_output_filename", type=str, help="y_pred.txt")  
 parser.add_argument("--prediction_folder", type=str, default="./", help="prediction_folder")
+parser.add_argument('--benchmark_evaluation',  default=False, help='benchmark_evaluation', action='store_true')         
+
                 
 opt = parser.parse_args()
 
@@ -137,6 +139,7 @@ if opt.ispredicting == False:
         # f.write(repr(opt))
         json.dump(opt.__dict__, f, indent=2)
 
+    
 else:
     with open(log_folder+"args.txt", "r") as f:
         saved_opt = json.load(f)
@@ -165,12 +168,12 @@ print(opt)
 
 
 def main():
-    
+    # gene_weights = pd.read_csv("../data/processed/L1000/min_max_ratio.csv", index_col=0).iloc[:, 0].tolist()
+    # gene_weights = torch.Tensor(gene_weights).cuda()
+    # print(gene_weights)
     # Losses
     criterion_GAN = torch.nn.MSELoss()
-    # criterion_cycle = torch.nn.L1Loss()
-    # criterion_identity = torch.nn.L1Loss()
-    criterion_cycle = torch.nn.MSELoss()
+    criterion_cycle = torch.nn.SmoothL1Loss()
     criterion_identity = torch.nn.MSELoss()
 
     cuda = torch.cuda.is_available()
@@ -196,6 +199,7 @@ def main():
         criterion_GAN.cuda()
         criterion_cycle.cuda()
         criterion_identity.cuda()
+        # gene_weights.cuda()
 
     if opt.epoch_resume != 0:
         # Load pretrained models
@@ -276,6 +280,25 @@ def main():
             first_col = rnaseq.columns.tolist()[0]
             rnaseq.set_index(first_col, inplace=True)
 
+
+        if opt.benchmark_evaluation== True: # eval benchmark dataset
+            if opt.eval_dataset_nameA in dataset_dict:
+                data_fileA = dataset_dict[opt.eval_dataset_nameA]
+                data_fileB = dataset_dict[opt.eval_dataset_nameB]
+            else:
+                data_fileA = opt.eval_dataset_nameA
+                data_fileB = opt.eval_dataset_nameB
+
+            eval_dataA = pd.read_feather(data_fileA)
+            first_col = eval_dataA.columns.tolist()[0]
+            eval_dataA.set_index(first_col, inplace=True)
+            eval_dataA = eval_dataA.sort_index(axis=1)
+
+            eval_dataB = pd.read_feather(data_fileB)
+            first_col = eval_dataB.columns.tolist()[0]
+            eval_dataB.set_index(first_col, inplace=True)
+            eval_dataB = eval_dataB.sort_index(axis=1)
+
         # sort by column names
         l1000 = l1000.sort_index(axis=1)
         rnaseq = rnaseq.sort_index(axis=1)
@@ -285,6 +308,9 @@ def main():
         rnaseq_tensor = torch.FloatTensor(rnaseq.values)
         print(rnaseq.shape)
 
+        # save prediction gene list
+        with open(prediction_folder+"prediction_gene_list.txt", "w") as f:
+            f.write("\n".join(rnaseq.columns.tolist()))
 
         dataloaderA = DataLoader(
             TensorDataset(l1000_tensor),
@@ -341,29 +367,33 @@ def main():
                 optimizer_G.zero_grad()
                 
                 # Identity loss
-                loss_id_A = criterion_identity(G_BA(real_A), real_A)
-                loss_id_B = criterion_identity(G_AB(real_B), real_B)
+                if opt.input_dimA == opt.input_dimB:
+                    loss_id_A = criterion_identity(G_BA(real_A), real_A)
+                    loss_id_B = criterion_identity(G_AB(real_B), real_B)
 
-                loss_identity = (loss_id_A + loss_id_B) / 2
+                    loss_identity = (loss_id_A + loss_id_B) / 2
                 
                 # GAN loss                
                 fake_B = G_AB(real_A)
-                loss_GAN_AB = criterion_GAN(D_B(fake_B), validA)
+                loss_GAN_AB = criterion_GAN(D_B(fake_B), validA)#*gene_weights
                 fake_A = G_BA(real_B)
-                loss_GAN_BA = criterion_GAN(D_A(fake_A), validA)
+                loss_GAN_BA = criterion_GAN(D_A(fake_A), validA)#*gene_weights
 
                 loss_GAN = (loss_GAN_AB + loss_GAN_BA) / 2
 
                 # Cycle loss
                 recov_A = G_BA(fake_B)
-                loss_cycle_A = criterion_cycle(recov_A, real_A)
+                loss_cycle_A = criterion_cycle(recov_A, real_A)#*gene_weights
                 recov_B = G_AB(fake_A)
-                loss_cycle_B = criterion_cycle(recov_B, real_B)
+                loss_cycle_B = criterion_cycle(recov_B, real_B)#*gene_weights
 
                 loss_cycle = (loss_cycle_A + loss_cycle_B) / 2
 
                 # Total loss
-                loss_G = loss_GAN + opt.lambda_cyc * loss_cycle + opt.lambda_id * loss_identity
+                if opt.input_dimA == opt.input_dimB:
+                    loss_G = loss_GAN + opt.lambda_cyc * loss_cycle + opt.lambda_id * loss_identity
+                else:
+                    loss_G = loss_GAN + opt.lambda_cyc * loss_cycle 
 
                 loss_G.backward()
                 optimizer_G.step()
@@ -375,10 +405,10 @@ def main():
                 optimizer_D_A.zero_grad()
 
                 # Real loss
-                loss_real = criterion_GAN(D_A(real_A), validA)
+                loss_real = criterion_GAN(D_A(real_A), validA)#*gene_weights
                 # Fake loss (on batch of previously generated samples)
                 fake_A_ = fake_A_buffer.push_and_pop(fake_A)
-                loss_fake = criterion_GAN(D_A(fake_A_.detach()), fakeA)
+                loss_fake = criterion_GAN(D_A(fake_A_.detach()), fakeA)#*gene_weights
                 # Total loss
                 loss_D_A = (loss_real + loss_fake) / 2
 
@@ -392,11 +422,11 @@ def main():
                 optimizer_D_B.zero_grad()
 
                 # Real loss
-                loss_real = criterion_GAN(D_B(real_B), validB)
+                loss_real = criterion_GAN(D_B(real_B), validB)#*gene_weights
 
                 # Fake loss (on batch of previously generated samples)
                 fake_B_ = fake_B_buffer.push_and_pop(fake_B)
-                loss_fake = criterion_GAN(D_B(fake_B_.detach()), fakeB)
+                loss_fake = criterion_GAN(D_B(fake_B_.detach()), fakeB)#*gene_weights
 
                 # Total loss
                 loss_D_B = (loss_real + loss_fake) / 2
@@ -418,21 +448,37 @@ def main():
                 prev_time = time.time()
 
                 # Print log
-                sys.stdout.write(
-                    "\r[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f, adv: %f, cycle: %f, identity: %f] ETA: %s"
-                    % (
-                        epoch+1,
-                        opt.n_epochs,
-                        i,
-                        len(dataloaderA),
-                        loss_D.item(),
-                        loss_G.item(),
-                        loss_GAN.item(),
-                        loss_cycle.item(),
-                        loss_identity.item(),
-                        time_left,
+                if opt.input_dimA == opt.input_dimB:
+                    sys.stdout.write(
+                        "\r[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f, adv: %f, cycle: %f, identity: %f] ETA: %s"
+                        % (
+                            epoch+1,
+                            opt.n_epochs,
+                            i,
+                            len(dataloaderA),
+                            loss_D.item(),
+                            loss_G.item(),
+                            loss_GAN.item(),
+                            loss_cycle.item(),
+                            loss_identity.item(),
+                            time_left,
+                        )
                     )
-                )
+                else:
+                    sys.stdout.write(
+                        "\r[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f, adv: %f, cycle: %f] ETA: %s"
+                        % (
+                            epoch+1,
+                            opt.n_epochs,
+                            i,
+                            len(dataloaderA),
+                            loss_D.item(),
+                            loss_G.item(),
+                            loss_GAN.item(),
+                            loss_cycle.item(),
+                            time_left,
+                        )
+                    )
             wandb.log({"D loss": loss_D.item(), "G Loss": loss_G.item(), "GAN loss": loss_GAN.item()})
 
             # Save loss_G and loss_D per epoch
@@ -457,6 +503,47 @@ def main():
                         (epoch))
 
                 # benchmark evaluation
+                if opt.benchmark_evaluation == True:                    
+
+                    eval_dataA_tensor = torch.FloatTensor(eval_dataA.values)
+                    eval_dataB_tensor = torch.FloatTensor(eval_dataB.values)
+                    
+                    eval_dataloaderA = DataLoader(
+                        TensorDataset(eval_dataA_tensor),
+                        batch_size=opt.batch_size,
+                        num_workers=opt.n_cpu,
+                    )
+                    eval_dataloaderB = DataLoader(
+                        TensorDataset(eval_dataB_tensor),
+                        batch_size=opt.batch_size,
+                        num_workers=opt.n_cpu,
+                    )
+
+                    G_AB.eval()
+
+                    real_A_total = list()
+                    fake_B_total = list() # prediction of A
+                    real_B_total = list()
+                    prev_time = time.time()
+
+                    for i, (batchA, batchB) in enumerate(zip(eval_dataloaderA, eval_dataloaderB)):
+                        # Set model input
+                        if cuda:
+                            real_A = batchA[0].cuda()  # number of samples in category A
+                            real_B = batchB[0].cuda()
+                        else:
+                            real_A = batchA[0]
+                            real_B = batchB[0]
+                
+                        fake_B = G_AB(real_A)
+                        fake_B = torch.reshape(fake_B, (real_B.shape[0], real_B.shape[1]))
+                        
+                        real_A_total.extend(real_A.cpu().detach().numpy()) 
+                        fake_B_total.extend(fake_B.cpu().detach().numpy()) 
+                        real_B_total.extend(real_B.cpu().detach().numpy())
+                    scores = get_scores(real_B_total, fake_B_total)
+                    print(scores)
+
                 
 
         # Write loss arrays to file
@@ -508,7 +595,8 @@ def main():
             first_col = rnaseq.columns.tolist()[0]
             rnaseq.set_index(first_col, inplace=True)
             rnaseq = rnaseq.sort_index(axis=1)
-            
+            rnaseq_featurenames = rnaseq.columns.tolist()
+
             l1000_tensor = torch.FloatTensor(l1000.values)
             rnaseq_tensor = torch.FloatTensor(rnaseq.values)
             if opt.shuffle == True:
@@ -525,6 +613,7 @@ def main():
                 num_workers=opt.n_cpu,
             )
 
+            
             # load model
             G_AB.load_state_dict(torch.load(model_folder+"G_AB_%d.pth" %
                             (opt.load_model_index)))
@@ -535,8 +624,10 @@ def main():
             # D_B.load_state_dict(torch.load("saved_models/%s/D_B_%d.pth" %
             #                 (opt.dataset_nameA, opt.load_model_index)))
             G_AB.eval()
-
-
+            
+            # get prediction gene list
+            with open(prediction_folder+"prediction_gene_list.txt", "r") as f:
+                prediction_gene_list = [x.strip() for x in f.readlines()]
 
             real_A_total = list()
             fake_B_total = list() # prediction of A
@@ -558,17 +649,18 @@ def main():
                 real_A_total.extend(real_A.cpu().detach().numpy()) 
                 fake_B_total.extend(fake_B.cpu().detach().numpy()) 
                 real_B_total.extend(real_B.cpu().detach().numpy())
-            scores = get_scores(real_B_total, fake_B_total)
-            # scores = get_scores(normalization(pd.DataFrame(real_B_total).T, z_normalization=True).T.values, normalization(pd.DataFrame(fake_B_total).T, z_normalization=True).T.values)
+
             
 
-            print("/".join(scores.keys()))
-            # print("\t".join(map(str, [round(item, 4) for item in scores.values()])))
-            print("\t".join(map(str, [item for item in scores.values()])))
-
-            real_B_total_df = pd.DataFrame(real_B_total, index=l1000_samplenames, columns=l1000_featurenames)
-            fake_B_total_df = pd.DataFrame(fake_B_total, index=l1000_samplenames, columns=l1000_featurenames)
+            real_B_total_df = pd.DataFrame(real_B_total, index=l1000_samplenames, columns=rnaseq_featurenames)
+            fake_B_total_df = pd.DataFrame(fake_B_total, index=l1000_samplenames, columns=rnaseq_featurenames)
             real_A_total_df = pd.DataFrame(real_A_total, index=l1000_samplenames, columns=l1000_featurenames)
+            
+            
+
+            scores = get_scores(real_B_total.values, fake_B_total.values)
+            print("/".join(scores.keys()))
+            print("\t".join(map(str, [item for item in scores.values()])))
 
             # save prediction results
             save_df(real_B_total_df, filename=prediction_folder+opt.y_true_output_filename, shuffle=opt.shuffle)
@@ -591,6 +683,8 @@ def main():
             l1000 = l1000.sort_index(axis=1)
             l1000_samplenames = l1000.index.tolist()
             l1000_featurenames = l1000.columns.tolist()
+            # with open("../data/ARCHS4/high_count_gene_list.txt", "r") as f:
+            #     featurenames = sorted([x.strip() for x in f.readlines()])
             print("input")
             print(l1000)
             
@@ -618,7 +712,7 @@ def main():
                     real_A = batchA[0]
         
                 fake_B = G_AB(real_A)
-                fake_B = torch.reshape(fake_B, (real_A.shape[0], real_A.shape[1]))
+                fake_B = torch.reshape(fake_B, (real_A.shape[0], opt.input_dimB))#real_A.shape[1]))
                 
                 real_A_total.extend(real_A.cpu().detach().numpy()) 
                 fake_B_total.extend(fake_B.cpu().detach().numpy()) 
