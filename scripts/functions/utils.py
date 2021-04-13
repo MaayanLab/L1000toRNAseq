@@ -118,8 +118,22 @@ def save_df(data, filename = "./y_true.txt", shuffle=False):
     elif filename.endswith(".f"):
         print("Saving in feather...")
         data.reset_index().to_feather(filename)
+    print(data.head())
     print("Saved!", filename)
-        
+
+def load_feather(filename):
+    df = pd.read_feather(filename)
+    first_col = df.columns.tolist()[0]
+    df = df.set_index(first_col)
+    
+    # sort dataframe by column names
+    df = df.sort_index(axis = 1) 
+    return df
+def load_csv(filename, sep):
+    df = pd.read_csv(filename, sep=sep, index_col=0)    
+    # sort dataframe by column names
+    df = df.sort_index(axis = 1) 
+    return df
 from scipy.spatial import distance
 
 def jaccard(a, b):

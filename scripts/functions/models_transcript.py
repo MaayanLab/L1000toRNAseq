@@ -45,8 +45,10 @@ class GeneratorResNet(nn.Module):
         # Encoder (Downsampling)
         model = [
             nn.Linear(input_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim, affine=False),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim, affine=False),
             nn.ReLU(),
             nn.Linear(hidden_dim, output_dim),
         ]
@@ -58,10 +60,13 @@ class GeneratorResNet(nn.Module):
         # Decoder (Upsampling)
         model += [
             nn.Linear(output_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim, affine=False),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim, affine=False),
             nn.ReLU(),
             nn.Linear(hidden_dim, output_dim_decoder),
+            nn.ReLU(),
         ]
 
         # Output layer
@@ -125,7 +130,7 @@ class Extrapolator(nn.Module):
                 model.append(nn.ReLU())
             
         model.append(nn.Linear(hidden_dims[i], output_dim))
-        # model.append(nn.ReLU())
+        model.append(nn.ReLU())
         self.model = nn.Sequential(*model)
 
     def forward(self, x):

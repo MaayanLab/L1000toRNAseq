@@ -90,36 +90,39 @@ parser.add_argument("--y_true_output_filename", type=str, help="y_true.txt")
 parser.add_argument("--y_pred_output_filename", type=str, help="y_pred.txt")  
 parser.add_argument("--prediction_folder", type=str, default="./", help="prediction_folder")
 parser.add_argument('--benchmark_evaluation',  default=False, help='benchmark_evaluation', action='store_true')         
+parser.add_argument('--gene_weights',  default=False, help='gene_weights', action='store_true')         
 
                 
 opt = parser.parse_args()
 
 dataset_dict = {
-    "L1000_MCF7": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n203x962_celllineMCF7.f",
-    "ARCHS4_MCF7": "../data/Evaluation/ARCHS4_human_matrix_v9_n203x25312_celllineMCF7.f",
-    "ARCHS4_MCF7_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n203x962_celllineMCF7.f",
+    "L1000_MCF7": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n205x962_celllineMCF7.f",
+    "ARCHS4_MCF7": "../data/Evaluation/ARCHS4_human_matrix_v9_n205x23614_celllineMCF7.f",
+    "ARCHS4_MCF7_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n205x962_celllineMCF7.f",
 
     "L1000_PC3": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n31x962_celllinePC3.f",
-    "ARCHS4_PC3": "../data/Evaluation/ARCHS4_human_matrix_v9_n31x25312_celllinePC3.f",
+    "ARCHS4_PC3": "../data/Evaluation/ARCHS4_human_matrix_v9_n31x23614_celllinePC3.f",
     "ARCHS4_PC3_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n31x962_celllinePC3.f",
 
     "L1000_A375": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n30x962_celllineA375.f",
-    "ARCHS4_A375": "../data/Evaluation/ARCHS4_human_matrix_v9_n30x25312_celllineA375.f",
+    "ARCHS4_A375": "../data/Evaluation/ARCHS4_human_matrix_v9_n30x23614_celllineA375.f",
     "ARCHS4_A375_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n30x962_celllineA375.f",
     
     "L1000_HEPG2": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n7x962_celllineHEPG2.f",
-    "ARCHS4_HEPG2": "../data/Evaluation/ARCHS4_human_matrix_v9_n7x25312_celllineHEPG2.f",
+    "ARCHS4_HEPG2": "../data/Evaluation/ARCHS4_human_matrix_v9_n7x23614_celllineHEPG2.f",
     "ARCHS4_HEPG2_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n7x962_celllineHEPG2.f",
     
     "L1000_VCAP": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n4x962_celllineVCAP.f",
-    "ARCHS4_VCAP": "../data/Evaluation/ARCHS4_human_matrix_v9_n4x25312_celllineVCAP.f",
+    "ARCHS4_VCAP": "../data/Evaluation/ARCHS4_human_matrix_v9_n4x23614_celllineVCAP.f",
     "ARCHS4_VCAP_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n4x962_celllineVCAP.f",
 
     "L1000": "../data/processed/L1000/L1000_filtered_GSE92742_Broad_LINCS_Level3_INF_mlr12k_n{}x{}.f",
     "ARCHS4": "../data/processed/ARCHS4/human_matrix_v9_filtered_n50000x962_v2.f",
-    "ARCHS4_full": "../data/processed/ARCHS4/human_matrix_v9_filtered_n{}x{}_step2_output.f",
-    "GTEx_L1000": "../data/processed/GTEx/GSE92743_Broad_GTEx_L1000_Level3_Q2NORM_filtered_n2929x962_v2.f",
+    "ARCHS4_full": "../data/processed/ARCHS4/human_matrix_v9_filtered_n{}x{}_v2.f",
+    "GTEx_L1000": "../data/processed/GTEx/GSE92743_Broad_GTEx_L1000_Level3_Q2NORM_filtered_n2929x962.f",
     "GTEx_RNAseq_landmark": "../data/processed/GTEx/GSE92743_Broad_GTEx_RNAseq_Log2RPKM_q2norm_filtered_n2929x962_v2.f",
+
+    "gene_weight": "../data/processed/gene_weights.txt"
 }
 
 # Create sample and checkpoint directories
@@ -164,20 +167,30 @@ else:
             opt.output_dimB = saved_opt["output_dim"]
         opt.num_samples = saved_opt["num_samples"]
 
+
+
 print(opt)
 
 
 def main():
-    # gene_weights = pd.read_csv("../data/processed/L1000/min_max_ratio.csv", index_col=0).iloc[:, 0].tolist()
-    # gene_weights = torch.Tensor(gene_weights).cuda()
-    # print(gene_weights)
+    
     # Losses
+    # criterion_GAN = torch.nn.MSELoss(reduction='none')
+    # criterion_cycle = torch.nn.SmoothL1Loss(reduction='none')
+    # criterion_identity = torch.nn.MSELoss(reduction='none')
     criterion_GAN = torch.nn.MSELoss()
     criterion_cycle = torch.nn.SmoothL1Loss()
     criterion_identity = torch.nn.MSELoss()
 
     cuda = torch.cuda.is_available()
     print("Cuda available", cuda)
+
+    if opt.gene_weights == True:
+        gene_weights = torch.Tensor(pd.read_csv(dataset_dict["gene_weight"], sep="\t", index_col=0).values) #iloc[:, 0].tolist())
+    else:
+        gene_weights = torch.ones(opt.input_dimA)
+
+
     input_shapeA = (opt.num_samples, opt.input_dimA)
     input_shapeB = (opt.num_samples, opt.input_dimB)
     intermediate_dimA = opt.hidden_dimA
@@ -199,7 +212,7 @@ def main():
         criterion_GAN.cuda()
         criterion_cycle.cuda()
         criterion_identity.cuda()
-        # gene_weights.cuda()
+        gene_weights = gene_weights.cuda()
 
     if opt.epoch_resume != 0:
         # Load pretrained models
@@ -271,14 +284,9 @@ def main():
             print(data_fileA)
             print(data_fileB)
 
-            l1000 = pd.read_feather(data_fileA)
-            first_col = l1000.columns.tolist()[0]
-            l1000.set_index(first_col, inplace=True)
-            
+            l1000 = load_feather(data_fileA)
 
-            rnaseq = pd.read_feather(data_fileB)
-            first_col = rnaseq.columns.tolist()[0]
-            rnaseq.set_index(first_col, inplace=True)
+            rnaseq = load_feather(data_fileB)
 
 
         if opt.benchmark_evaluation== True: # eval benchmark dataset
@@ -289,15 +297,9 @@ def main():
                 data_fileA = opt.eval_dataset_nameA
                 data_fileB = opt.eval_dataset_nameB
 
-            eval_dataA = pd.read_feather(data_fileA)
-            first_col = eval_dataA.columns.tolist()[0]
-            eval_dataA.set_index(first_col, inplace=True)
-            eval_dataA = eval_dataA.sort_index(axis=1)
-
-            eval_dataB = pd.read_feather(data_fileB)
-            first_col = eval_dataB.columns.tolist()[0]
-            eval_dataB.set_index(first_col, inplace=True)
-            eval_dataB = eval_dataB.sort_index(axis=1)
+            eval_dataA = load_feather(data_fileA)
+            
+            eval_dataB = load_feather(data_fileB)
 
         # sort by column names
         l1000 = l1000.sort_index(axis=1)
@@ -368,36 +370,42 @@ def main():
                 
                 # Identity loss
                 if opt.input_dimA == opt.input_dimB:
-                    loss_id_A = criterion_identity(G_BA(real_A), real_A)
-                    loss_id_B = criterion_identity(G_AB(real_B), real_B)
+                    # print("criterion_identity", criterion_identity(G_BA(real_A), real_A).shape)
+                    loss_id_A = criterion_identity(G_BA(real_A), real_A)*gene_weights.mean()
+                    loss_id_B = criterion_identity(G_AB(real_B), real_B)*gene_weights.mean()
 
                     loss_identity = (loss_id_A + loss_id_B) / 2
                 
                 # GAN loss                
                 fake_B = G_AB(real_A)
-                loss_GAN_AB = criterion_GAN(D_B(fake_B), validA)#*gene_weights
+                loss_GAN_AB = criterion_GAN(D_B(fake_B), validA)*gene_weights.mean()
                 fake_A = G_BA(real_B)
-                loss_GAN_BA = criterion_GAN(D_A(fake_A), validA)#*gene_weights
+                loss_GAN_BA = criterion_GAN(D_A(fake_A), validA)*gene_weights.mean()
 
-                loss_GAN = (loss_GAN_AB + loss_GAN_BA) / 2
+                loss_GAN = (loss_GAN_AB + loss_GAN_BA) / 2            
 
                 # Cycle loss
                 recov_A = G_BA(fake_B)
-                loss_cycle_A = criterion_cycle(recov_A, real_A)#*gene_weights
+                loss_cycle_A = criterion_cycle(recov_A, real_A)*gene_weights.mean()
                 recov_B = G_AB(fake_A)
-                loss_cycle_B = criterion_cycle(recov_B, real_B)#*gene_weights
+                loss_cycle_B = criterion_cycle(recov_B, real_B)*gene_weights.mean()
 
                 loss_cycle = (loss_cycle_A + loss_cycle_B) / 2
 
                 # Total loss
                 if opt.input_dimA == opt.input_dimB:
+                    # print(loss_GAN)
+                    # print(loss_cycle)
+                    # print(loss_identity)
                     loss_G = loss_GAN + opt.lambda_cyc * loss_cycle + opt.lambda_id * loss_identity
                 else:
                     loss_G = loss_GAN + opt.lambda_cyc * loss_cycle 
 
+                # print(loss_G)
                 loss_G.backward()
                 optimizer_G.step()
-
+                # import sys
+                # sys.exit()
                 # -----------------------
                 #  Train Discriminator A
                 # -----------------------
@@ -405,10 +413,10 @@ def main():
                 optimizer_D_A.zero_grad()
 
                 # Real loss
-                loss_real = criterion_GAN(D_A(real_A), validA)#*gene_weights
+                loss_real = criterion_GAN(D_A(real_A), validA).mean()
                 # Fake loss (on batch of previously generated samples)
                 fake_A_ = fake_A_buffer.push_and_pop(fake_A)
-                loss_fake = criterion_GAN(D_A(fake_A_.detach()), fakeA)#*gene_weights
+                loss_fake = criterion_GAN(D_A(fake_A_.detach()), fakeA).mean()
                 # Total loss
                 loss_D_A = (loss_real + loss_fake) / 2
 
@@ -422,11 +430,11 @@ def main():
                 optimizer_D_B.zero_grad()
 
                 # Real loss
-                loss_real = criterion_GAN(D_B(real_B), validB)#*gene_weights
+                loss_real = criterion_GAN(D_B(real_B), validB).mean()
 
                 # Fake loss (on batch of previously generated samples)
                 fake_B_ = fake_B_buffer.push_and_pop(fake_B)
-                loss_fake = criterion_GAN(D_B(fake_B_.detach()), fakeB)#*gene_weights
+                loss_fake = criterion_GAN(D_B(fake_B_.detach()), fakeB).mean()
 
                 # Total loss
                 loss_D_B = (loss_real + loss_fake) / 2
@@ -582,21 +590,18 @@ def main():
             print(data_fileB)
             
 
-            l1000 = pd.read_feather(data_fileA)
-            first_col = l1000.columns.tolist()[0]
-            l1000.set_index(first_col, inplace=True)
-            l1000 = l1000.sort_index(axis=1)
-
+            l1000 = load_feather(data_fileA)
             l1000_samplenames = l1000.index.tolist()
             l1000_featurenames = l1000.columns.tolist()
 
 
-            rnaseq = pd.read_feather(data_fileB)
-            first_col = rnaseq.columns.tolist()[0]
-            rnaseq.set_index(first_col, inplace=True)
-            rnaseq = rnaseq.sort_index(axis=1)
+            rnaseq = load_feather(data_fileB)
             rnaseq_featurenames = rnaseq.columns.tolist()
 
+            print("y_input")
+            print(l1000.head())
+            print("y_true")
+            print(rnaseq.head())
             l1000_tensor = torch.FloatTensor(l1000.values)
             rnaseq_tensor = torch.FloatTensor(rnaseq.values)
             if opt.shuffle == True:
@@ -658,7 +663,7 @@ def main():
             
             
 
-            scores = get_scores(real_B_total.values, fake_B_total.values)
+            scores = get_scores(real_B_total_df.values, fake_B_total_df.values)
             print("/".join(scores.keys()))
             print("\t".join(map(str, [item for item in scores.values()])))
 
@@ -677,10 +682,7 @@ def main():
             print(data_fileA)
             
 
-            l1000 = pd.read_feather(data_fileA) # sample x feature
-            first_col = l1000.columns.tolist()[0]
-            l1000.set_index(first_col, inplace=True)
-            l1000 = l1000.sort_index(axis=1)
+            l1000 = load_feather(data_fileA) # sample x feature
             l1000_samplenames = l1000.index.tolist()
             l1000_featurenames = l1000.columns.tolist()
             # with open("../data/ARCHS4/high_count_gene_list.txt", "r") as f:

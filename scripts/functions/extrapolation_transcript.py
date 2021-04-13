@@ -93,7 +93,9 @@ parser.add_argument('--evaluation',  default=False, help='calculate scores or ju
 parser.add_argument("--prediction_folder", type=str, default="./", help="prediction_folder")
 
 parser.add_argument("--output_gene_list", type=str, default="prediction_gene_list.txt", help="output_gene_list")
-
+parser.add_argument("--weight_decay", type=float, default=0.0001,
+                    help="weight_decay")  
+                    
 opt = parser.parse_args()
 
 dataset_dict = {
@@ -103,23 +105,23 @@ dataset_dict = {
 
 
     "L1000_MCF7": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n203x962_celllineMCF7.f",
-    "ARCHS4_MCF7": "../data/Evaluation/ARCHS4_human_matrix_v9_n203x25312_celllineMCF7.f",
+    "ARCHS4_MCF7": "../data/Evaluation/ARCHS4_human_matrix_v9_n203x23614_celllineMCF7.f",
     "ARCHS4_MCF7_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n203x962_celllineMCF7.f",
 
     "L1000_PC3": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n31x962_celllinePC3.f",
-    "ARCHS4_PC3": "../data/Evaluation/ARCHS4_human_matrix_v9_n31x25312_celllinePC3.f",
+    "ARCHS4_PC3": "../data/Evaluation/ARCHS4_human_matrix_v9_n31x23614_celllinePC3.f",
     "ARCHS4_PC3_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n31x962_celllinePC3.f",
 
     "L1000_A375": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n30x962_celllineA375.f",
-    "ARCHS4_A375": "../data/Evaluation/ARCHS4_human_matrix_v9_n30x25312_celllineA375.f",
+    "ARCHS4_A375": "../data/Evaluation/ARCHS4_human_matrix_v9_n30x23614_celllineA375.f",
     "ARCHS4_A375_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n30x962_celllineA375.f",
     
     "L1000_HEPG2": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n7x962_celllineHEPG2.f",
-    "ARCHS4_HEPG2": "../data/Evaluation/ARCHS4_human_matrix_v9_n7x25312_celllineHEPG2.f",
+    "ARCHS4_HEPG2": "../data/Evaluation/ARCHS4_human_matrix_v9_n7x23614_celllineHEPG2.f",
     "ARCHS4_HEPG2_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n7x962_celllineHEPG2.f",
     
     "L1000_VCAP": "../data/Evaluation/GSE92742_Broad_LINCS_Level3_INF_mlr12k_n4x962_celllineVCAP.f",
-    "ARCHS4_VCAP": "../data/Evaluation/ARCHS4_human_matrix_v9_n4x25312_celllineVCAP.f",
+    "ARCHS4_VCAP": "../data/Evaluation/ARCHS4_human_matrix_v9_n4x23614_celllineVCAP.f",
     "ARCHS4_VCAP_landmark": "../data/Evaluation/ARCHS4_human_matrix_v9_n4x962_celllineVCAP.f",
 
     "GTEx_L1000": "../data/processed/GTEx/GSE92743_Broad_GTEx_L1000_Level3_Q2NORM_filtered_n2929x962_v2.f",
@@ -196,7 +198,7 @@ def main():
 
     # Optimizers
     optimizer_E = torch.optim.Adam(
-        E.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
+        E.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2), weight_decay=opt.weight_decay)
 
     lr_scheduler_E = torch.optim.lr_scheduler.StepLR(
         optimizer_E, step_size=opt.decay_epoch, gamma=opt.gamma
@@ -210,13 +212,8 @@ def main():
         input_data_file = dataset_dict[opt.input_dataset_name]
         output_data_file = dataset_dict[opt.output_dataset_name]
         
-        input_data = pd.read_feather(input_data_file)
-        first_col = input_data.columns.tolist()[0]
-        input_data.set_index(first_col, inplace=True)
-
-        output_data = pd.read_feather(output_data_file)
-        first_col = output_data.columns.tolist()[0]
-        output_data.set_index(first_col, inplace=True)
+        input_data = load_feather(input_data_file)
+        output_data = load_feather(output_data_file)
         
         print(input_data_file)
         print(input_data.shape)
@@ -231,6 +228,11 @@ def main():
         input_tensor_train = torch.FloatTensor(input_data_train.values)
         output_tensor_train = torch.FloatTensor(output_data_train.values)
 
+        # save gene list
+        with open(log_folder+opt.output_gene_list, "w") as f:
+            print("Save gene list: ", log_folder+opt.output_gene_list)
+            gene_list = output_data.columns.tolist()
+            f.write("\n".join(sorted(gene_list)))
 
         loss_E_perEpoch = list()
 
@@ -318,11 +320,9 @@ def main():
             print(data_fileA)
 
             if data_fileA.endswith(".f"):
-                input = pd.read_feather(data_fileA)
-                first_col = input.columns.tolist()[0]
-                input.set_index(first_col, inplace=True)
+                input = load_feather(data_fileA)
             else:
-                input = pd.read_csv(data_fileA, sep="\t", index_col=0)
+                input = load_csv(data_fileA, sep="\t")
             print(input)
             input_tensor = torch.FloatTensor(input.values)
             
@@ -344,10 +344,9 @@ def main():
                 predictions.extend(pred.cpu().detach().numpy()) 
             
             # load gene list
-            with open(prediction_folder+opt.output_gene_list, "r") as f:
+            with open(log_folder+opt.output_gene_list, "r") as f:
                 gene_list = [x.strip() for x in f.readlines()]
                 gene_list = sorted(gene_list)
-
             sample_list = input.index.tolist()
             prediction_df = pd.DataFrame(predictions, index=sample_list, columns=gene_list)
             
@@ -373,17 +372,12 @@ def main():
             print(data_fileA)
             print(data_fileB)
 
-            output = pd.read_feather(data_fileB)
-            first_col = output.columns.tolist()[0]
-            output.set_index(first_col, inplace=True)
-            output = output.sort_index(axis=1)
+            output = load_feather(data_fileB)
 
             if data_fileA.endswith(".f"):
-                input = pd.read_feather(data_fileA)
-                first_col = input.columns.tolist()[0]
-                input.set_index(first_col, inplace=True)
+                input = load_feather(data_fileA)
             else:
-                input = pd.read_csv(data_fileA, sep="\t", index_col=0)
+                input = load_csv(data_fileA, sep="\t")
             print("input")
             print(input)
         
@@ -420,7 +414,7 @@ def main():
                 predictions.extend(pred.cpu().detach().numpy()) 
             
             # load gene list
-            with open(prediction_folder+opt.output_gene_list, "r") as f:
+            with open(log_folder+opt.output_gene_list, "r") as f:
                 gene_list = [x.strip() for x in f.readlines()]
                 gene_list = sorted(gene_list)
 
@@ -446,8 +440,8 @@ def main():
             print("answer")
             print(output)
             # save prediction results
-            save(y_true, filename=prediction_folder+opt.y_true_output_filename, shuffle=opt.shuffle)
-            save_df(prediction_df, filename=prediction_folder+opt.y_pred_output_filename, shuffle=opt.shuffle)
+            save_df(output_filtered, filename=prediction_folder+opt.y_true_output_filename, shuffle=opt.shuffle)
+            save_df(prediction_df_filtered, filename=prediction_folder+opt.y_pred_output_filename, shuffle=opt.shuffle)
 
 
 def train_step(model, criterion, optimizer, input_tensor_train, output_tensor_train):
